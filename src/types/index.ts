@@ -56,6 +56,31 @@ export interface StorySession {
   emotionalState: EmotionalState
   transcript: TranscriptEntry[]
   metadata: SessionMetadata
+  tauvusConversationId?: string
+  storyTemplate: StoryTemplate
+  currentMilestone: string
+  safetyAlerts: SafetyAlert[]
+}
+
+export interface StoryTemplate {
+  id: string
+  title: string
+  category: 'adventure' | 'educational' | 'moral' | 'bedtime'
+  ageRange: [number, number]
+  description: string
+  estimatedDuration: number
+  difficulty: 'simple' | 'intermediate' | 'advanced'
+  replicaId: string // Tauvus replica to use for this story
+  storyType: 'static' | 'dynamic'
+}
+
+export interface SafetyAlert {
+  level: 'low' | 'medium' | 'high'
+  keywords: string[]
+  message: string
+  timestamp: Date
+  context: 'child-input' | 'story-content' | 'behavior-analysis'
+  resolved?: boolean
 }
 
 export interface StoryScene {
