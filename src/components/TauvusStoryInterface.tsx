@@ -6,16 +6,20 @@ import {
   Volume2, 
   VolumeX, 
   Home,
-  AlertTriangle,
   Clock,
   Pause,
-  Play
+  Play,
+  Settings
 } from 'lucide-react'
 
 import { tauvusService, type TauvusReplica, type TauvusConversation } from '../services/tauvusService'
-import { storyService, type StoryTemplate } from '../services/storyService'
+import { storyService, type StoryTemplate, type StoryChoice } from '../services/storyService'
 import EmotionDetector from './EmotionDetector'
 import VoiceInput from './VoiceInput'
+import StoryProgressTracker from './StoryProgressTracker'
+import SafetyMonitor from './SafetyMonitor'
+import InteractiveChoices from './InteractiveChoices'
+import EmotionalFeedback from './EmotionalFeedback'
 import type { EmotionalState, SafetyAlert, TranscriptEntry } from '../types'
 
 interface TauvusStoryInterfaceProps {
@@ -41,8 +45,11 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
   
   // Story state
   const [currentMilestone, setCurrentMilestone] = useState<string>('')
+  const [completedMilestones, setCompletedMilestones] = useState<string[]>([])
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [safetyAlerts, setSafetyAlerts] = useState<SafetyAlert[]>([])
+  const [availableChoices, setAvailableChoices] = useState<StoryChoice[]>([])
+  const [isWaitingForChoice, setIsWaitingForChoice] = useState(false)
   
   // Interaction state
   const [emotionalState, setEmotionalState] = useState<EmotionalState | null>(null)
@@ -50,6 +57,7 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [cameraEnabled, setCameraEnabled] = useState(true)
+  const [showSettings, setShowSettings] = useState(false)
   
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -103,6 +111,13 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
       // Initialize first milestone
       if (template.milestones && template.milestones.length > 0) {
         setCurrentMilestone(template.milestones[0].id)
+        
+        // Check if first milestone has choices (for dynamic stories)
+        const firstMilestone = template.milestones[0]
+        if (firstMilestone.choices && firstMilestone.choices.length > 0) {
+          setAvailableChoices(firstMilestone.choices)
+          setIsWaitingForChoice(true)
+        }
       }
       
       // Initialize camera if enabled
@@ -210,12 +225,45 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
     
     // Update milestone if needed
     if (storyResponse.nextMilestone) {
-      setCurrentMilestone(storyResponse.nextMilestone)
+      advanceToMilestone(storyResponse.nextMilestone)
+    }
+    
+    // Handle choices for dynamic stories
+    if (storyResponse.choices && storyResponse.choices.length > 0) {
+      setAvailableChoices(storyResponse.choices)
+      setIsWaitingForChoice(true)
+    } else {
+      setAvailableChoices([])
+      setIsWaitingForChoice(false)
     }
     
     // End session if story is complete
     if (!storyResponse.shouldContinue) {
       handleSessionEnd()
+    }
+  }
+
+  const handleChoiceSelect = (choice: StoryChoice) => {
+    addTranscriptEntry('child', `Selected: ${choice.text}`)
+    addTranscriptEntry('character', choice.consequence)
+    
+    setIsWaitingForChoice(false)
+    setAvailableChoices([])
+    
+    if (choice.nextMilestone) {
+      advanceToMilestone(choice.nextMilestone)
+    }
+  }
+
+  const advanceToMilestone = (milestoneId: string) => {
+    setCompletedMilestones(prev => [...prev, currentMilestone])
+    setCurrentMilestone(milestoneId)
+    
+    // Check if new milestone has choices
+    const milestone = template.milestones.find(m => m.id === milestoneId)
+    if (milestone?.choices && milestone.choices.length > 0) {
+      setAvailableChoices(milestone.choices)
+      setIsWaitingForChoice(true)
     }
   }
 
@@ -235,6 +283,12 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
     setIsSessionActive(false)
     cleanup()
     onEmergencyStop()
+  }
+
+  const handleDismissAlert = (index: number) => {
+    setSafetyAlerts(prev => prev.map((alert, i) => 
+      i === index ? { ...alert, resolved: true } : alert
+    ))
   }
 
   const formatTime = (seconds: number): string => {
@@ -303,12 +357,12 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
               </span>
             </div>
             
-            {/* Safety Alert */}
-            {safetyAlerts.length > 0 && (
-              <div className="bg-yellow-500/20 backdrop-blur-sm text-yellow-300 p-3 rounded-full">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-            )}
+            {/* Safety Monitor */}
+            <SafetyMonitor
+              alerts={safetyAlerts}
+              onDismissAlert={handleDismissAlert}
+              onEmergencyStop={handleEmergencyStop}
+            />
             
             {/* Camera Toggle */}
             <button
@@ -332,6 +386,14 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
               }`}
             >
               {audioEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+            </button>
+            
+            {/* Settings */}
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="bg-white/20 backdrop-blur-sm text-white p-3 rounded-full hover:bg-white/30 transition-colors"
+            >
+              <Settings className="w-5 h-5" />
             </button>
             
             {/* Emergency Stop */}
@@ -361,6 +423,11 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
                   <p className="text-white/70 child-interface">
                     Telling: {template.title}
                   </p>
+                  {replica.persona && (
+                    <p className="text-white/50 text-sm mt-2 max-w-md mx-auto">
+                      {replica.persona.personality}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -368,31 +435,16 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
           
           {/* Story Progress */}
           <div className="absolute bottom-6 left-6 right-6">
-            <motion.div
-              className="bg-black/50 backdrop-blur-sm text-white p-4 rounded-xl child-interface"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm opacity-70">Story Progress</span>
-                <span className="text-sm opacity-70">
-                  Milestone: {currentMilestone}
-                </span>
-              </div>
-              <div className="w-full bg-white/20 rounded-full h-2">
-                <div 
-                  className="bg-primary-500 h-2 rounded-full transition-all duration-500"
-                  style={{ 
-                    width: `${(template.milestones?.findIndex(m => m.id === currentMilestone) + 1) / (template.milestones?.length || 1) * 100}%` 
-                  }}
-                />
-              </div>
-            </motion.div>
+            <StoryProgressTracker
+              template={template}
+              currentMilestone={currentMilestone}
+              completedMilestones={completedMilestones}
+            />
           </div>
         </div>
 
         {/* Side Panel */}
-        <div className="w-80 bg-black/30 backdrop-blur-sm p-6 space-y-6">
+        <div className="w-80 bg-black/30 backdrop-blur-sm p-6 space-y-6 overflow-y-auto hide-scrollbar">
           {/* Child's Video Feed */}
           {cameraEnabled && (
             <div className="space-y-4">
@@ -420,17 +472,22 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
                 onEmotionDetected={handleEmotionDetected}
                 enabled={cameraEnabled}
               />
-              
-              {emotionalState && (
-                <div className="bg-white/10 rounded-lg p-3">
-                  <div className="text-white text-sm space-y-1">
-                    <div>😊 Happy: {Math.round(emotionalState.emotions.joy * 100)}%</div>
-                    <div>😮 Surprised: {Math.round(emotionalState.emotions.surprise * 100)}%</div>
-                    <div>🎯 Attention: {Math.round(emotionalState.attention * 100)}%</div>
-                  </div>
-                </div>
-              )}
             </div>
+          )}
+
+          {/* Emotional Feedback */}
+          <EmotionalFeedback
+            emotionalState={emotionalState}
+            childName={childName}
+          />
+
+          {/* Interactive Choices */}
+          {availableChoices.length > 0 && (
+            <InteractiveChoices
+              choices={availableChoices}
+              onChoiceSelect={handleChoiceSelect}
+              disabled={!isWaitingForChoice}
+            />
           )}
 
           {/* Voice Input */}
@@ -443,7 +500,7 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
               onVoiceInput={handleVoiceInput}
               onStartListening={() => setIsListening(true)}
               onStopListening={() => setIsListening(false)}
-              enabled={audioEnabled}
+              enabled={audioEnabled && !isWaitingForChoice}
             />
             
             <div className="flex justify-center">
@@ -451,11 +508,15 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
                 className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${
                   isListening
                     ? 'bg-red-500 animate-pulse'
+                    : isWaitingForChoice
+                    ? 'bg-yellow-500'
                     : 'bg-primary-500'
                 }`}
               >
                 {isListening ? (
                   <MicOff className="w-6 h-6 text-white" />
+                ) : isWaitingForChoice ? (
+                  <span className="text-white text-xs">Choose</span>
                 ) : (
                   <Mic className="w-6 h-6 text-white" />
                 )}
@@ -463,7 +524,9 @@ const TauvusStoryInterface: React.FC<TauvusStoryInterfaceProps> = ({
             </div>
             
             <p className="text-white/70 text-sm text-center child-interface">
-              {isListening ? 'Listening...' : 'Tap to ask questions!'}
+              {isListening ? 'Listening...' : 
+               isWaitingForChoice ? 'Make your choice above!' :
+               'Tap to ask questions!'}
             </p>
           </div>
 
